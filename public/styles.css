@@ -19,15 +19,24 @@ button {
   border-radius: 8px;
   border: none;
 }
+button.active {
+  background: #00ff7f;
+  color: #000;
+  font-weight: bold;
+}
+
+.muted {
+  color: #aaa;
+}
 
 .ok {
   color: #00ff7f;
   font-size: 24px;
+  font-weight: bold;
 }
 
 .fail {
   color: #ff4444;
   font-size: 24px;
+  font-weight: bold;
 }
-
-
