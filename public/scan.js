@@ -14,9 +14,17 @@ const departBtn = document.getElementById("depart");
 const returnBtn = document.getElementById("return");
 
 /* =========================
+   ORIENTATION LOCK (BEST EFFORT)
+========================= */
+if (screen.orientation && screen.orientation.lock) {
+  screen.orientation.lock("portrait").catch(() => {
+    // iOS may require user interaction first – safe to ignore
+  });
+}
+
+/* =========================
    UI MODE HANDLING
 ========================= */
-
 function setMode(mode) {
   scanType = mode;
 
@@ -31,6 +39,11 @@ function setMode(mode) {
   }
 
   statusEl.className = "muted";
+
+  // Subtle haptic feedback (where supported)
+  if (navigator.vibrate) {
+    navigator.vibrate(30);
+  }
 }
 
 // Default mode
@@ -43,7 +56,6 @@ returnBtn.addEventListener("click", () => setMode("RETURN"));
 /* =========================
    CAMERA (REAR / ENVIRONMENT)
 ========================= */
-
 navigator.mediaDevices.getUserMedia({
   video: { facingMode: { ideal: "environment" } },
   audio: false
@@ -61,9 +73,8 @@ navigator.mediaDevices.getUserMedia({
 /* =========================
    QR DETECTION SETUP
 ========================= */
-
 if (!("BarcodeDetector" in window)) {
-  statusEl.textContent = "QR SCANNING NOT SUPPORTED ON THIS DEVICE";
+  statusEl.textContent = "QR SCANNING NOT SUPPORTED";
   statusEl.className = "fail";
   throw new Error("BarcodeDetector not supported");
 }
@@ -73,7 +84,6 @@ const detector = new BarcodeDetector({ formats: ["qr_code"] });
 /* =========================
    MAIN SCAN LOOP
 ========================= */
-
 setInterval(async () => {
   try {
     const barcodes = await detector.detect(video);
@@ -86,7 +96,7 @@ setInterval(async () => {
       const url = new URL(rawValue);
       token = url.pathname.split("/").pop();
     } catch {
-      return; // Not a valid URL QR
+      return; // Not a valid QR URL
     }
 
     // Prevent rapid duplicate scans
@@ -110,7 +120,7 @@ setInterval(async () => {
     statusEl.className = data.ok ? "ok" : "fail";
 
   } catch (err) {
-    // Silent failure per frame to keep scanning smooth
+    // Silent per-frame errors to keep scanning smooth
   }
 }, 800);
 
