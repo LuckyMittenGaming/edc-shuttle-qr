@@ -94,7 +94,7 @@ setInterval(async () => {
     let token;
     try {
       const url = new URL(rawValue);
-      token = url.pathname.split("/").pop();
+token = url.searchParams.get("token");
     } catch {
       return; // Not a valid QR URL
     }
