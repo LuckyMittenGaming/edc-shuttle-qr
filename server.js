@@ -3,6 +3,10 @@ const db = require("./db");
 const { now } = require("./util");
 const path = require("path");
 
+// Node 18+ has fetch built-in (Render does)
+const GOOGLE_VALIDATE_URL =
+  "https://script.google.com/macros/s/AKfycbyP94hI0NOjDE5kM1r5X6NIwhrCxQ6C2oJ1cxwzsHN6tlAQvSec7-8cAli3csJo5fv2nw/exec";
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -17,46 +21,73 @@ app.get("/scan", (req, res) => {
   res.sendFile(path.join(__dirname, "public/scan.html"));
 });
 
-app.post("/api/scan", (req, res) => {
-  const { token, scanType, bookingType } = req.body;
+/* =========================================================
+   SCAN ENDPOINT — GOOGLE IS SOURCE OF TRUTH
+========================================================= */
+app.post("/api/scan", async (req, res) => {
+  try {
+    const { token, scanType } = req.body;
 
-  if (!token) {
-    return res.json({ ok: false, message: "NO TOKEN" });
+    if (!token) {
+      log("—", scanType, "FAIL", "NO TOKEN");
+      return res.json({ ok: false, message: "NO TOKEN" });
+    }
+
+    // Call Google Apps Script validator
+    const response = await fetch(
+      GOOGLE_VALIDATE_URL + "?token=" + encodeURIComponent(token)
+    );
+
+    const result = await response.json();
+
+    /*
+      Expected Google response:
+      {
+        status: "ALLOWED" | "DENIED" | "ERROR",
+        message: "...",
+        timestamp: "..."
+      }
+    */
+
+    if (result.status !== "ALLOWED") {
+      log(token, scanType, "FAIL", result.message);
+      return res.json({
+        ok: false,
+        message: result.message || "INVALID QR"
+      });
+    }
+
+    // ✅ Valid scan
+    log(token, scanType, "OK", "VALID PASS");
+    return res.json({
+      ok: true,
+      message: "VALID PASS"
+    });
+
+  } catch (err) {
+    console.error("Scan error:", err);
+    log("—", "SYSTEM", "ERROR", err.message);
+    return res.json({
+      ok: false,
+      message: "SCAN ERROR"
+    });
   }
-
-  const pass = db
-    .prepare("SELECT * FROM passes WHERE token = ?")
-    .get(token);
-
-  if (!pass) {
-    log(token, scanType, "FAIL", "INVALID QR");
-    return res.json({ ok: false, message: "INVALID QR" });
-  }
-
-  if (bookingType === "PRIVATE") {
-    log(token, scanType, "OK", "PRIVATE VEHICLE – OK");
-    return res.json({ ok: true, message: "PRIVATE VEHICLE – OK" });
-  }
-
-  if (pass.status === "USED") {
-    log(token, scanType, "FAIL", "ALREADY USED");
-    return res.json({ ok: false, message: "ALREADY USED" });
-  }
-
-  db.prepare("UPDATE passes SET status='USED' WHERE token=?").run(token);
-  log(token, scanType, "OK", "VALID PASS");
-
-  res.json({ ok: true, message: "VALID PASS" });
 });
 
+/* =========================================================
+   LOGGING (LOCAL AUDIT TRAIL)
+========================================================= */
 function log(token, type, result, message) {
-  db.prepare(`
-    INSERT INTO scans (token, scan_type, result, message, scanned_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(token, type, result, message, now());
+  try {
+    db.prepare(`
+      INSERT INTO scans (token, scan_type, result, message, scanned_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(token, type, result, message, now());
+  } catch (e) {
+    console.error("Logging error:", e);
+  }
 }
 
 app.listen(PORT, () => {
-  console.log("QR backend running on port", PORT);
+  console.log("🚍 EDC Shuttle QR backend running on port", PORT);
 });
-
