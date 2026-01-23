@@ -1,6 +1,6 @@
 /* =========================================================
    EDC SHUTTLE – STAFF QR SCANNER
-   FINAL PRODUCTION VERSION
+   FINAL PRODUCTION VERSION (TOKEN-SAFE)
 ========================================================= */
 
 let scanType = "DEPART";
@@ -40,7 +40,6 @@ function setMode(mode) {
 
   statusEl.className = "muted";
 
-  // Subtle haptic feedback (where supported)
   if (navigator.vibrate) {
     navigator.vibrate(30);
   }
@@ -89,19 +88,32 @@ setInterval(async () => {
     const barcodes = await detector.detect(video);
     if (!barcodes.length) return;
 
-    const rawValue = barcodes[0].rawValue;
+    const rawValue = String(barcodes[0].rawValue || "").trim();
+    if (!rawValue) return;
 
-    let token;
-    try {
-      const url = new URL(rawValue);
-token = url.searchParams.get("token");
-    } catch {
-      return; // Not a valid QR URL
+    let token = null;
+
+    // ✅ CASE 1: Token-only QR (PREFERRED)
+    if (rawValue.startsWith("EDC-")) {
+      token = rawValue;
     }
+
+    // ✅ CASE 2: URL QR (fallback / backward compatible)
+    else {
+      try {
+        const url = new URL(rawValue);
+        token = url.searchParams.get("token");
+      } catch (e) {
+        return; // Not usable QR content
+      }
+    }
+
+    if (!token) return;
 
     // Prevent rapid duplicate scans
     const now = Date.now();
     if (token === lastToken && now - lastScanTime < 2000) return;
+
     lastToken = token;
     lastScanTime = now;
 
@@ -116,11 +128,12 @@ token = url.searchParams.get("token");
 
     const data = await response.json();
 
-    statusEl.textContent = data.message;
+    statusEl.textContent = data.message || "UNKNOWN RESPONSE";
     statusEl.className = data.ok ? "ok" : "fail";
 
   } catch (err) {
     // Silent per-frame errors to keep scanning smooth
+    console.error("Scan error:", err);
   }
 }, 800);
 
