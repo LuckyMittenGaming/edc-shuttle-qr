@@ -129,11 +129,14 @@ setInterval(async () => {
     statusEl.textContent = "CHECKING…";
     statusEl.className = "muted";
 
-    const response = await fetch("/api/scan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, scanType })
-    });
+    const SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbyP94hI0NOjDE5kM1r5X6NIwhrCxQ6C2oJ1cxwzsHN6tlAQvSec7-8cAli3csJo5fv2nw/exec";
+
+const response = await fetch(
+  `${SCRIPT_URL}?token=${encodeURIComponent(token)}`
+);
+
+const data = await response.json();
 
     const data = await response.json();
 
