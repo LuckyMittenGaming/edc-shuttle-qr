@@ -1,6 +1,6 @@
 /* =========================================================
    EDC SHUTTLE – STAFF QR SCANNER
-   FINAL PRODUCTION VERSION (ROBUST TOKEN HANDLING)
+   FINAL PRODUCTION VERSION (ROBUST TOKEN HANDLING + PROXY FIX)
 ========================================================= */
 
 let scanType = "DEPART";
@@ -17,7 +17,7 @@ const returnBtn = document.getElementById("return");
 ========================= */
 if (screen.orientation && screen.orientation.lock) {
   screen.orientation.lock("portrait").catch(() => {
-    // iOS may require user interaction first
+    // iOS may require user interaction first, or not support lock
   });
 }
 
@@ -44,13 +44,14 @@ function setMode(mode) {
   }
 }
 
+// Initialize default mode
 setMode("DEPART");
 
 departBtn.addEventListener("click", () => setMode("DEPART"));
 returnBtn.addEventListener("click", () => setMode("RETURN"));
 
 /* =========================
-   CAMERA (REAR / ENVIRONMENT)
+   CAMERA SETUP (REAR / ENVIRONMENT)
 ========================= */
 navigator.mediaDevices.getUserMedia({
   video: { facingMode: { ideal: "environment" } },
@@ -58,7 +59,8 @@ navigator.mediaDevices.getUserMedia({
 })
 .then(stream => {
   video.srcObject = stream;
-  video.play();
+  // iOS Safari requires playsinline in HTML, but playing here ensures it starts
+  video.play(); 
 })
 .catch(err => {
   statusEl.textContent = "CAMERA ERROR";
@@ -72,16 +74,17 @@ navigator.mediaDevices.getUserMedia({
 if (!("BarcodeDetector" in window)) {
   statusEl.textContent = "QR SCANNING NOT SUPPORTED";
   statusEl.className = "fail";
-  throw new Error("BarcodeDetector not supported");
+  throw new Error("BarcodeDetector not supported in this browser");
 }
 
 const detector = new BarcodeDetector({ formats: ["qr_code"] });
 
 /* =========================
-   MAIN SCAN LOOP (ROBUST)
+   MAIN SCAN LOOP
 ========================= */
 setInterval(async () => {
   try {
+    // 1. Detect Barcodes
     const barcodes = await detector.detect(video);
     if (!barcodes.length) return;
 
@@ -94,30 +97,31 @@ setInterval(async () => {
        TOKEN EXTRACTION LOGIC
     ---------------------------------- */
 
-    // CASE 1: Token-only QR (BEST / PREFERRED)
+    // CASE 1: Token-only QR (e.g., "EDC-963648...")
     if (rawValue.startsWith("EDC-")) {
       token = rawValue;
     }
 
-    // CASE 2: Full URL QR (expected fallback)
+    // CASE 2: Full URL QR (e.g., "https://script.google.com...?token=EDC-...")
     else if (rawValue.includes("token=")) {
       try {
+        // We use the 'URL' object to safely parse query parameters
         const url = new URL(rawValue);
         token = url.searchParams.get("token");
       } catch (err) {
-        // URL constructor can fail on partial reads
+        console.warn("URL Parse failed, attempting fallback regex");
       }
     }
 
-    // CASE 3: Partial URL / weird scan → extract manually
-    if (!token && rawValue.includes("EDC-")) {
+    // CASE 3: Fallback Regex (Extract "EDC-" pattern from any string)
+    if (!token) {
       const match = rawValue.match(/EDC-[A-Z0-9\-]+/);
       if (match) {
         token = match[0];
       }
     }
 
-    // Final safety check
+    // Final safety check: If we still don't have a token, ignore this scan.
     if (!token) return;
 
     /* ---------------------------------
@@ -126,33 +130,54 @@ setInterval(async () => {
     if (token === lastScannedToken) return;
     lastScannedToken = token;
 
+    // Provide immediate visual feedback that we are processing
     statusEl.textContent = "CHECKING…";
     statusEl.className = "muted";
 
-    const SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbyP94hI0NOjDE5kM1r5X6NIwhrCxQ6C2oJ1cxwzsHN6tlAQvSec7-8cAli3csJo5fv2nw/exec";
+    /* ---------------------------------
+       SEND TO SERVER (PROXY)
+    ---------------------------------- */
+    // FIX: We send data to YOUR server (/api/scan), not Google directly.
+    try {
+      const response = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          token: token, 
+          scanType: scanType 
+        })
+      });
 
-const response = await fetch(
-  `${SCRIPT_URL}?token=${encodeURIComponent(token)}`
-);
+      const data = await response.json();
 
-const data = await response.json();
+      // Show the message returned by server (which comes from Google)
+      statusEl.textContent = data.message || "UNKNOWN ERROR";
+      
+      // Update color based on success/fail
+      statusEl.className = data.ok ? "ok" : "fail";
 
-    const data = await response.json();
+      // HAPTIC FEEDBACK
+      if (navigator.vibrate) {
+        if (data.ok) {
+           navigator.vibrate(50); // Short buzz for success
+        } else {
+           navigator.vibrate([100, 50, 100]); // Double buzz for error
+        }
+      }
 
-    statusEl.textContent = data.message || "UNKNOWN RESPONSE";
-    statusEl.className = data.ok ? "ok" : "fail";
+    } catch (networkErr) {
+      console.error("Network Error:", networkErr);
+      statusEl.textContent = "NETWORK ERROR";
+      statusEl.className = "fail";
+    }
 
-    // Allow same QR again after short delay
+    // Reset debounce after 3 seconds so the same person can scan again if needed
     setTimeout(() => {
       lastScannedToken = null;
     }, 3000);
 
   } catch (err) {
+    // Silent catch for general loop errors (e.g. video stream hiccups)
     console.error("Scanner loop error:", err);
   }
 }, 800);
-
-/* =========================================================
-   END SCANNER
-========================================================= */
