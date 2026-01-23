@@ -1,6 +1,6 @@
 /* =========================================================
    EDC SHUTTLE – STAFF QR SCANNER
-   FINAL PRODUCTION VERSION (ROBUST TOKEN HANDLING + PROXY FIX)
+   VERSION: ROBUST TOKEN + DIRECTION VALIDATION + VISUAL FLASH
 ========================================================= */
 
 let scanType = "DEPART";
@@ -13,12 +13,33 @@ const departBtn = document.getElementById("depart");
 const returnBtn = document.getElementById("return");
 
 /* =========================
+   HELPER: VISUAL FLASH
+========================= */
+function triggerFlash(type) {
+  // Remove existing classes to allow re-triggering animation
+  document.body.classList.remove("flash-ok", "flash-fail");
+  
+  // Force a reflow (browser repaint) so the animation restarts if triggered quickly
+  void document.body.offsetWidth;
+
+  // Add the appropriate class
+  if (type === "ok") {
+    document.body.classList.add("flash-ok");
+  } else {
+    document.body.classList.add("flash-fail");
+  }
+
+  // Classes automatically fade out via CSS, but we clean up after 500ms
+  setTimeout(() => {
+    document.body.classList.remove("flash-ok", "flash-fail");
+  }, 500);
+}
+
+/* =========================
    ORIENTATION LOCK (BEST EFFORT)
 ========================= */
 if (screen.orientation && screen.orientation.lock) {
-  screen.orientation.lock("portrait").catch(() => {
-    // iOS may require user interaction first, or not support lock
-  });
+  screen.orientation.lock("portrait").catch(() => {});
 }
 
 /* =========================
@@ -26,32 +47,29 @@ if (screen.orientation && screen.orientation.lock) {
 ========================= */
 function setMode(mode) {
   scanType = mode;
+  lastScannedToken = null; // Reset memory so we can re-scan immediately if needed
 
   if (mode === "DEPART") {
     departBtn.classList.add("active");
     returnBtn.classList.remove("active");
-    statusEl.textContent = "MODE: DEPARTURE";
+    statusEl.textContent = "MODE: DEPARTURE (Scanning 'TO' tickets)";
   } else {
     returnBtn.classList.add("active");
     departBtn.classList.remove("active");
-    statusEl.textContent = "MODE: RETURN";
+    statusEl.textContent = "MODE: RETURN (Scanning 'FROM' tickets)";
   }
 
   statusEl.className = "muted";
-
-  if (navigator.vibrate) {
-    navigator.vibrate(30);
-  }
+  if (navigator.vibrate) navigator.vibrate(30);
 }
 
-// Initialize default mode
 setMode("DEPART");
 
 departBtn.addEventListener("click", () => setMode("DEPART"));
 returnBtn.addEventListener("click", () => setMode("RETURN"));
 
 /* =========================
-   CAMERA SETUP (REAR / ENVIRONMENT)
+   CAMERA SETUP
 ========================= */
 navigator.mediaDevices.getUserMedia({
   video: { facingMode: { ideal: "environment" } },
@@ -59,8 +77,7 @@ navigator.mediaDevices.getUserMedia({
 })
 .then(stream => {
   video.srcObject = stream;
-  // iOS Safari requires playsinline in HTML, but playing here ensures it starts
-  video.play(); 
+  video.play();
 })
 .catch(err => {
   statusEl.textContent = "CAMERA ERROR";
@@ -74,7 +91,7 @@ navigator.mediaDevices.getUserMedia({
 if (!("BarcodeDetector" in window)) {
   statusEl.textContent = "QR SCANNING NOT SUPPORTED";
   statusEl.className = "fail";
-  throw new Error("BarcodeDetector not supported in this browser");
+  throw new Error("BarcodeDetector not supported");
 }
 
 const detector = new BarcodeDetector({ formats: ["qr_code"] });
@@ -84,7 +101,6 @@ const detector = new BarcodeDetector({ formats: ["qr_code"] });
 ========================= */
 setInterval(async () => {
   try {
-    // 1. Detect Barcodes
     const barcodes = await detector.detect(video);
     if (!barcodes.length) return;
 
@@ -93,91 +109,101 @@ setInterval(async () => {
 
     let token = null;
 
-    /* ---------------------------------
-       TOKEN EXTRACTION LOGIC
-    ---------------------------------- */
-
-    // CASE 1: Token-only QR (e.g., "EDC-963648...")
+    // --- 1. ROBUST EXTRACTION ---
     if (rawValue.startsWith("EDC-")) {
       token = rawValue;
-    }
-
-    // CASE 2: Full URL QR (e.g., "https://script.google.com...?token=EDC-...")
-    else if (rawValue.includes("token=")) {
+    } else if (rawValue.includes("token=")) {
       try {
-        // We use the 'URL' object to safely parse query parameters
         const url = new URL(rawValue);
         token = url.searchParams.get("token");
-      } catch (err) {
-        console.warn("URL Parse failed, attempting fallback regex");
-      }
+      } catch (err) { }
     }
-
-    // CASE 3: Fallback Regex (Extract "EDC-" pattern from any string)
+    
+    // Fallback Regex
     if (!token) {
       const match = rawValue.match(/EDC-[A-Z0-9\-]+/);
-      if (match) {
-        token = match[0];
+      if (match) token = match[0];
+    }
+
+    if (!token) return;
+
+    // --- 2. GATEKEEPER (Direction Check) ---
+    if (token === lastScannedToken) return;
+
+    // DEPART Mode Check
+    if (scanType === "DEPART") {
+      if (!token.includes("-TO-")) {
+        statusEl.textContent = "WRONG DIRECTION! (Ticket is RETURN)";
+        statusEl.className = "fail";
+        triggerFlash("fail"); // RED FLASH
+        
+        if (navigator.vibrate) navigator.vibrate([50, 50, 50, 50]);
+        
+        lastScannedToken = token;
+        setTimeout(() => { 
+            lastScannedToken = null; 
+            statusEl.textContent = "READY"; 
+            statusEl.className = "muted"; 
+        }, 2000);
+        return; 
       }
     }
 
-    // Final safety check: If we still don't have a token, ignore this scan.
-    if (!token) return;
+    // RETURN Mode Check
+    if (scanType === "RETURN") {
+      if (!token.includes("-FROM-")) {
+        statusEl.textContent = "WRONG DIRECTION! (Ticket is DEPART)";
+        statusEl.className = "fail";
+        triggerFlash("fail"); // RED FLASH
 
-    /* ---------------------------------
-       DEBOUNCE DUPLICATE SCANS
-    ---------------------------------- */
-    if (token === lastScannedToken) return;
+        if (navigator.vibrate) navigator.vibrate([50, 50, 50, 50]);
+        
+        lastScannedToken = token;
+        setTimeout(() => { 
+            lastScannedToken = null; 
+            statusEl.textContent = "READY"; 
+            statusEl.className = "muted"; 
+        }, 2000);
+        return;
+      }
+    }
+    
+    // --- 3. SERVER VALIDATION ---
     lastScannedToken = token;
-
-    // Provide immediate visual feedback that we are processing
     statusEl.textContent = "CHECKING…";
     statusEl.className = "muted";
 
-    /* ---------------------------------
-       SEND TO SERVER (PROXY)
-    ---------------------------------- */
-    // FIX: We send data to YOUR server (/api/scan), not Google directly.
     try {
       const response = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          token: token, 
-          scanType: scanType 
-        })
+        body: JSON.stringify({ token: token, scanType: scanType })
       });
 
       const data = await response.json();
 
-      // Show the message returned by server (which comes from Google)
       statusEl.textContent = data.message || "UNKNOWN ERROR";
-      
-      // Update color based on success/fail
       statusEl.className = data.ok ? "ok" : "fail";
 
-      // HAPTIC FEEDBACK
-      if (navigator.vibrate) {
-        if (data.ok) {
-           navigator.vibrate(50); // Short buzz for success
-        } else {
-           navigator.vibrate([100, 50, 100]); // Double buzz for error
-        }
+      if (data.ok) {
+        triggerFlash("ok"); // GREEN FLASH
+        if (navigator.vibrate) navigator.vibrate(50);
+      } else {
+        triggerFlash("fail"); // RED FLASH
+        if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
       }
 
     } catch (networkErr) {
-      console.error("Network Error:", networkErr);
       statusEl.textContent = "NETWORK ERROR";
       statusEl.className = "fail";
+      triggerFlash("fail"); // RED FLASH
     }
 
-    // Reset debounce after 3 seconds so the same person can scan again if needed
     setTimeout(() => {
       lastScannedToken = null;
     }, 3000);
 
   } catch (err) {
-    // Silent catch for general loop errors (e.g. video stream hiccups)
     console.error("Scanner loop error:", err);
   }
 }, 800);
