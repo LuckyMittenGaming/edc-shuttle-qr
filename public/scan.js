@@ -1,11 +1,10 @@
 /* =========================================================
    EDC SHUTTLE – STAFF QR SCANNER
-   FINAL PRODUCTION VERSION (TOKEN-SAFE)
+   FINAL PRODUCTION VERSION (ROBUST TOKEN HANDLING)
 ========================================================= */
 
 let scanType = "DEPART";
-let lastToken = null;
-let lastScanTime = 0;
+let lastScannedToken = null;
 
 const video = document.getElementById("video");
 const statusEl = document.getElementById("status");
@@ -18,7 +17,7 @@ const returnBtn = document.getElementById("return");
 ========================= */
 if (screen.orientation && screen.orientation.lock) {
   screen.orientation.lock("portrait").catch(() => {
-    // iOS may require user interaction first – safe to ignore
+    // iOS may require user interaction first
   });
 }
 
@@ -45,10 +44,8 @@ function setMode(mode) {
   }
 }
 
-// Default mode
 setMode("DEPART");
 
-// Button handlers
 departBtn.addEventListener("click", () => setMode("DEPART"));
 returnBtn.addEventListener("click", () => setMode("RETURN"));
 
@@ -81,7 +78,7 @@ if (!("BarcodeDetector" in window)) {
 const detector = new BarcodeDetector({ formats: ["qr_code"] });
 
 /* =========================
-   MAIN SCAN LOOP
+   MAIN SCAN LOOP (ROBUST)
 ========================= */
 setInterval(async () => {
   try {
@@ -93,29 +90,41 @@ setInterval(async () => {
 
     let token = null;
 
-    // ✅ CASE 1: Token-only QR (PREFERRED)
+    /* ---------------------------------
+       TOKEN EXTRACTION LOGIC
+    ---------------------------------- */
+
+    // CASE 1: Token-only QR (BEST / PREFERRED)
     if (rawValue.startsWith("EDC-")) {
       token = rawValue;
     }
 
-    // ✅ CASE 2: URL QR (fallback / backward compatible)
-    else {
+    // CASE 2: Full URL QR (expected fallback)
+    else if (rawValue.includes("token=")) {
       try {
         const url = new URL(rawValue);
         token = url.searchParams.get("token");
-      } catch (e) {
-        return; // Not usable QR content
+      } catch (err) {
+        // URL constructor can fail on partial reads
       }
     }
 
+    // CASE 3: Partial URL / weird scan → extract manually
+    if (!token && rawValue.includes("EDC-")) {
+      const match = rawValue.match(/EDC-[A-Z0-9\-]+/);
+      if (match) {
+        token = match[0];
+      }
+    }
+
+    // Final safety check
     if (!token) return;
 
-    // Prevent rapid duplicate scans
-    const now = Date.now();
-    if (token === lastToken && now - lastScanTime < 2000) return;
-
-    lastToken = token;
-    lastScanTime = now;
+    /* ---------------------------------
+       DEBOUNCE DUPLICATE SCANS
+    ---------------------------------- */
+    if (token === lastScannedToken) return;
+    lastScannedToken = token;
 
     statusEl.textContent = "CHECKING…";
     statusEl.className = "muted";
@@ -131,9 +140,13 @@ setInterval(async () => {
     statusEl.textContent = data.message || "UNKNOWN RESPONSE";
     statusEl.className = data.ok ? "ok" : "fail";
 
+    // Allow same QR again after short delay
+    setTimeout(() => {
+      lastScannedToken = null;
+    }, 3000);
+
   } catch (err) {
-    // Silent per-frame errors to keep scanning smooth
-    console.error("Scan error:", err);
+    console.error("Scanner loop error:", err);
   }
 }, 800);
 
