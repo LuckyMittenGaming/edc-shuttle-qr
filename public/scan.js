@@ -1,6 +1,6 @@
 /* =========================================================
    EDC SHUTTLE – STAFF QR SCANNER
-   VERSION: ROBUST TOKEN + DIRECTION VALIDATION + VISUAL FLASH
+   VERSION: ROBUST TOKEN + ROUND TRIP SUPPORT + VISUAL FLASH
 ========================================================= */
 
 let scanType = "DEPART";
@@ -52,11 +52,11 @@ function setMode(mode) {
   if (mode === "DEPART") {
     departBtn.classList.add("active");
     returnBtn.classList.remove("active");
-    statusEl.textContent = "MODE: DEPARTURE (Scanning 'TO' tickets)";
+    statusEl.textContent = "MODE: DEPARTURE (Scanning 'TO' or 'ROUND')";
   } else {
     returnBtn.classList.add("active");
     departBtn.classList.remove("active");
-    statusEl.textContent = "MODE: RETURN (Scanning 'FROM' tickets)";
+    statusEl.textContent = "MODE: RETURN (Scanning 'FROM' or 'ROUND')";
   }
 
   statusEl.className = "muted";
@@ -128,12 +128,14 @@ setInterval(async () => {
     if (!token) return;
 
     // --- 2. GATEKEEPER (Direction Check) ---
+    // Prevent scanning the same code multiple times in a row
     if (token === lastScannedToken) return;
 
     // DEPART Mode Check
     if (scanType === "DEPART") {
-      if (!token.includes("-TO-")) {
-        statusEl.textContent = "WRONG DIRECTION! (Ticket is RETURN)";
+      // Valid if token contains "-TO-" OR "-ROUND-"
+      if (!token.includes("-TO-") && !token.includes("-ROUND-")) {
+        statusEl.textContent = "WRONG DIRECTION! (Ticket is RETURN Only)";
         statusEl.className = "fail";
         triggerFlash("fail"); // RED FLASH
         
@@ -151,8 +153,9 @@ setInterval(async () => {
 
     // RETURN Mode Check
     if (scanType === "RETURN") {
-      if (!token.includes("-FROM-")) {
-        statusEl.textContent = "WRONG DIRECTION! (Ticket is DEPART)";
+      // Valid if token contains "-FROM-" OR "-ROUND-"
+      if (!token.includes("-FROM-") && !token.includes("-ROUND-")) {
+        statusEl.textContent = "WRONG DIRECTION! (Ticket is DEPART Only)";
         statusEl.className = "fail";
         triggerFlash("fail"); // RED FLASH
 
