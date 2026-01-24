@@ -177,26 +177,33 @@ setInterval(async () => {
     statusEl.className = "muted";
 
     try {
-      const response = await fetch("/api/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: token, scanType: scanType })
+      // ✅ UPDATE: Construct a GET URL with parameters
+      // This is your specific Google Apps Script Web App URL
+      const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyP94hI0NOjDE5kM1r5X6NIwhrCxQ6C2oJ1cxwzsHN6tlAQvSec7-8cAli3csJo5fv2nw/exec";
+      
+      const fullUrl = `${SCRIPT_URL}?token=${encodeURIComponent(token)}&scanType=${encodeURIComponent(scanType)}`;
+
+      const response = await fetch(fullUrl, {
+        method: "GET", // Changed to GET for simple Apps Script handling
       });
 
       const data = await response.json();
 
-      statusEl.textContent = data.message || "UNKNOWN ERROR";
-      statusEl.className = data.ok ? "ok" : "fail";
-
-      if (data.ok) {
-        triggerFlash("ok"); // GREEN FLASH
+      // Handle Response
+      if (data.status === "ALLOWED") {
+        statusEl.textContent = data.message; // "VALID PASS"
+        statusEl.className = "ok";
+        triggerFlash("ok");
         if (navigator.vibrate) navigator.vibrate(50);
       } else {
-        triggerFlash("fail"); // RED FLASH
+        statusEl.textContent = data.message; // "ALREADY SCANNED IN" or "DENIED"
+        statusEl.className = "fail";
+        triggerFlash("fail");
         if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
       }
 
     } catch (networkErr) {
+      console.error(networkErr);
       statusEl.textContent = "NETWORK ERROR";
       statusEl.className = "fail";
       triggerFlash("fail"); // RED FLASH
