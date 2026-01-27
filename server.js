@@ -3,15 +3,19 @@
  * server.js
  * EDC Shuttle QR Scanner Server
  * =========================================================
- * Handles QR scan intake, normalization, and validation
+ * - Serves scanner UI (GET /scan)
+ * - Accepts QR scans (POST /scan)
+ * - Normalizes QR payloads
+ * - Validates tokens against RideLedger
  * =========================================================
  */
 
 const express = require('express');
 const bodyParser = require('body-parser');
+const path = require('path');
 
 const { extractToken, logNormalization } = require('./util');
-const { validateQRToken } = require('./db'); // assumes your existing validator
+const { validateQRToken } = require('./db'); // existing RideLedger validator
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,26 +26,38 @@ const PORT = process.env.PORT || 3000;
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+// Serve static files (scan.html, scan.js, styles.css, etc.)
+app.use(express.static(path.join(__dirname, 'public')));
+
 /* =========================================================
-   HEALTH CHECK (optional but useful onsite)
+   HEALTH CHECK (OPTIONAL)
 ========================================================= */
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', service: 'EDC QR Scanner' });
 });
 
 /* =========================================================
+   SCANNER UI
+   Browser loads this via GET
+========================================================= */
+app.get('/scan', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'scan.html'));
+});
+
+/* =========================================================
    QR SCAN ENDPOINT
-   THIS IS THE IMPORTANT PART
+   Scanner JS POSTs here
 ========================================================= */
 app.post('/scan', async (req, res) => {
   try {
     // ---------------------------------------------
-    // 1. Capture RAW scanned value
+    // 1. Capture RAW scanned value (defensive)
     // ---------------------------------------------
     const rawScan =
       req.body?.value ||
       req.body?.scan ||
       req.body?.data ||
+      req.body?.qr ||
       '';
 
     // ---------------------------------------------
@@ -49,7 +65,7 @@ app.post('/scan', async (req, res) => {
     // ---------------------------------------------
     const token = extractToken(rawScan);
 
-    // Optional logging (very helpful onsite)
+    // Optional but VERY useful onsite
     logNormalization(rawScan, token);
 
     if (!token) {
@@ -64,13 +80,13 @@ app.post('/scan', async (req, res) => {
     // ---------------------------------------------
     const result = await validateQRToken(token);
 
-    /**
-     * Expected result shape (example):
-     * {
-     *   allowed: true|false,
-     *   message: 'VALID PASS' | 'ALREADY USED' | 'INVALID PASS'
-     * }
-     */
+    /*
+      Expected result shape:
+      {
+        allowed: true | false,
+        message: 'VALID PASS' | 'ALREADY USED' | 'INVALID PASS'
+      }
+    */
 
     if (!result || result.allowed !== true) {
       return res.json({
@@ -102,4 +118,5 @@ app.post('/scan', async (req, res) => {
 ========================================================= */
 app.listen(PORT, () => {
   console.log(`🚐 EDC Shuttle QR Scanner running on port ${PORT}`);
+  console.log(`📷 Scanner UI: http://localhost:${PORT}/scan`);
 });
