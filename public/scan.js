@@ -1,6 +1,6 @@
 /* =========================================================
    EDC SHUTTLE – STAFF QR SCANNER
-   VERSION: ROBUST TOKEN + ROUND TRIP SUPPORT + VISUAL FLASH
+   VERSION: ULTIMATE ROBUST EXTRACTION + VISUAL FLASH
 ========================================================= */
 
 let scanType = "DEPART";
@@ -16,30 +16,18 @@ const returnBtn = document.getElementById("return");
    HELPER: VISUAL FLASH
 ========================= */
 function triggerFlash(type) {
-  // Remove existing classes to allow re-triggering animation
   document.body.classList.remove("flash-ok", "flash-fail");
-  
-  // Force a reflow (browser repaint) so the animation restarts if triggered quickly
-  void document.body.offsetWidth;
+  void document.body.offsetWidth; // Force reflow
 
-  // Add the appropriate class
   if (type === "ok") {
     document.body.classList.add("flash-ok");
   } else {
     document.body.classList.add("flash-fail");
   }
 
-  // Classes automatically fade out via CSS, but we clean up after 500ms
   setTimeout(() => {
     document.body.classList.remove("flash-ok", "flash-fail");
   }, 500);
-}
-
-/* =========================
-   ORIENTATION LOCK (BEST EFFORT)
-========================= */
-if (screen.orientation && screen.orientation.lock) {
-  screen.orientation.lock("portrait").catch(() => {});
 }
 
 /* =========================
@@ -47,7 +35,7 @@ if (screen.orientation && screen.orientation.lock) {
 ========================= */
 function setMode(mode) {
   scanType = mode;
-  lastScannedToken = null; // Reset memory so we can re-scan immediately if needed
+  lastScannedToken = null; 
 
   if (mode === "DEPART") {
     departBtn.classList.add("active");
@@ -69,7 +57,7 @@ departBtn.addEventListener("click", () => setMode("DEPART"));
 returnBtn.addEventListener("click", () => setMode("RETURN"));
 
 /* =========================
-   CAMERA SETUP
+   CAMERA & DETECTOR SETUP
 ========================= */
 navigator.mediaDevices.getUserMedia({
   video: { facingMode: { ideal: "environment" } },
@@ -85,9 +73,6 @@ navigator.mediaDevices.getUserMedia({
   console.error("Camera error:", err);
 });
 
-/* =========================
-   QR DETECTION SETUP
-========================= */
 if (!("BarcodeDetector" in window)) {
   statusEl.textContent = "QR SCANNING NOT SUPPORTED";
   statusEl.className = "fail";
@@ -96,77 +81,74 @@ if (!("BarcodeDetector" in window)) {
 
 const detector = new BarcodeDetector({ formats: ["qr_code"] });
 
-/* =========================
+/* =========================================================
    MAIN SCAN LOOP
-========================= */
+========================================================= */
 setInterval(async () => {
   try {
     const barcodes = await detector.detect(video);
     if (!barcodes.length) return;
 
-    const rawValue = String(barcodes[0].rawValue || "").trim();
+    let rawValue = String(barcodes[0].rawValue || "").trim();
     if (!rawValue) return;
 
     let token = null;
 
-    // --- 1. ROBUST EXTRACTION ---
-    if (rawValue.startsWith("EDC-")) {
-      token = rawValue;
-    } else if (rawValue.includes("token=")) {
+    // --- 1. ROBUST EXTRACTION LOGIC ---
+    // Pattern: EDC + 6 digits + Day + numbers + 8 char hex/id
+    const tokenRegex = /EDC-[0-9]{6}-[A-Z]{3}-[0-9]+-[A-Z0-9]{8}/i;
+
+    // A. Check if the raw value IS the token
+    if (tokenRegex.test(rawValue)) {
+      const match = rawValue.match(tokenRegex);
+      token = match[0].toUpperCase();
+    } 
+    // B. Check if it's a URL (Full or Partial)
+    else if (rawValue.includes("token=")) {
       try {
-        const url = new URL(rawValue);
+        const url = new URL(rawValue.startsWith('http') ? rawValue : 'https://dummy.com' + rawValue);
         token = url.searchParams.get("token");
-      } catch (err) { }
+      } catch (e) {
+        const decoded = decodeURIComponent(rawValue);
+        const match = decoded.match(tokenRegex);
+        if (match) token = match[0].toUpperCase();
+      }
     }
-    
-    // Fallback Regex
+    // C. Final Catch-All: Just look for the pattern anywhere in the string
     if (!token) {
-      const match = rawValue.match(/EDC-[A-Z0-9\-]+/);
-      if (match) token = match[0];
+      const match = rawValue.match(tokenRegex);
+      if (match) token = match[0].toUpperCase();
     }
 
     if (!token) return;
 
-    // --- 2. GATEKEEPER (Direction Check) ---
-    // Prevent scanning the same code multiple times in a row
+    // --- 2. GATEKEEPER (Direction & Repeat Check) ---
     if (token === lastScannedToken) return;
 
-    // DEPART Mode Check
+    // DEPART Mode Direction Check
     if (scanType === "DEPART") {
-      // Valid if token contains "-TO-" OR "-ROUND-"
       if (!token.includes("-TO-") && !token.includes("-ROUND-")) {
         statusEl.textContent = "WRONG DIRECTION! (Ticket is RETURN Only)";
         statusEl.className = "fail";
-        triggerFlash("fail"); // RED FLASH
-        
+        triggerFlash("fail");
         if (navigator.vibrate) navigator.vibrate([50, 50, 50, 50]);
         
         lastScannedToken = token;
-        setTimeout(() => { 
-            lastScannedToken = null; 
-            statusEl.textContent = "READY"; 
-            statusEl.className = "muted"; 
-        }, 2000);
+        setTimeout(() => { lastScannedToken = null; statusEl.textContent = "READY"; }, 2000);
         return; 
       }
     }
 
-    // RETURN Mode Check
+    // RETURN Mode Direction Check
     if (scanType === "RETURN") {
-      // Valid if token contains "-FROM-" OR "-ROUND-"
       if (!token.includes("-FROM-") && !token.includes("-ROUND-")) {
         statusEl.textContent = "WRONG DIRECTION! (Ticket is DEPART Only)";
         statusEl.className = "fail";
-        triggerFlash("fail"); // RED FLASH
-
+        triggerFlash("fail");
         if (navigator.vibrate) navigator.vibrate([50, 50, 50, 50]);
         
         lastScannedToken = token;
-        setTimeout(() => { 
-            lastScannedToken = null; 
-            statusEl.textContent = "READY"; 
-            statusEl.className = "muted"; 
-        }, 2000);
+        setTimeout(() => { lastScannedToken = null; statusEl.textContent = "READY"; }, 2000);
         return;
       }
     }
@@ -177,26 +159,19 @@ setInterval(async () => {
     statusEl.className = "muted";
 
     try {
-      // ✅ UPDATE: Construct a GET URL with parameters
-      // This is your specific Google Apps Script Web App URL
       const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyP94hI0NOjDE5kM1r5X6NIwhrCxQ6C2oJ1cxwzsHN6tlAQvSec7-8cAli3csJo5fv2nw/exec";
-      
       const fullUrl = `${SCRIPT_URL}?token=${encodeURIComponent(token)}&scanType=${encodeURIComponent(scanType)}`;
 
-      const response = await fetch(fullUrl, {
-        method: "GET", // Changed to GET for simple Apps Script handling
-      });
-
+      const response = await fetch(fullUrl, { method: "GET" });
       const data = await response.json();
 
-      // Handle Response
       if (data.status === "ALLOWED") {
-        statusEl.textContent = data.message; // "VALID PASS"
+        statusEl.textContent = data.message;
         statusEl.className = "ok";
         triggerFlash("ok");
         if (navigator.vibrate) navigator.vibrate(50);
       } else {
-        statusEl.textContent = data.message; // "ALREADY SCANNED IN" or "DENIED"
+        statusEl.textContent = data.message;
         statusEl.className = "fail";
         triggerFlash("fail");
         if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
@@ -206,9 +181,10 @@ setInterval(async () => {
       console.error(networkErr);
       statusEl.textContent = "NETWORK ERROR";
       statusEl.className = "fail";
-      triggerFlash("fail"); // RED FLASH
+      triggerFlash("fail");
     }
 
+    // Allow re-scanning after 3 seconds
     setTimeout(() => {
       lastScannedToken = null;
     }, 3000);
