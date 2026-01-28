@@ -1,122 +1,93 @@
-/**
- * =========================================================
- * server.js
- * EDC Shuttle QR Scanner Server
- * =========================================================
- * - Serves scanner UI (GET /scan)
- * - Accepts QR scans (POST /scan)
- * - Normalizes QR payloads
- * - Validates tokens against RideLedger
- * =========================================================
- */
+const express = require("express");
+const db = require("./db");
+const { now } = require("./util");
+const path = require("path");
 
-const express = require('express');
-const bodyParser = require('body-parser');
-const path = require('path');
-
-const { extractToken, logNormalization } = require('./util');
-const { validateQRToken } = require('./db'); // existing RideLedger validator
+// Node 18+ has fetch built-in (Render does)
+const GOOGLE_VALIDATE_URL =
+  "https://script.google.com/macros/s/AKfycbyP94hI0NOjDE5kM1r5X6NIwhrCxQ6C2oJ1cxwzsHN6tlAQvSec7-8cAli3csJo5fv2nw/exec";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* =========================================================
-   MIDDLEWARE
-========================================================= */
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json());
+app.use("/public", express.static(path.join(__dirname, "public")));
 
-// Serve static files (scan.html, scan.js, styles.css, etc.)
-app.use(express.static(path.join(__dirname, 'public')));
+app.get("/", (req, res) => {
+  res.send("EDC Shuttle QR Backend Running");
+});
 
-/* =========================================================
-   HEALTH CHECK (OPTIONAL)
-========================================================= */
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', service: 'EDC QR Scanner' });
+app.get("/scan", (req, res) => {
+  res.sendFile(path.join(__dirname, "public/scan.html"));
 });
 
 /* =========================================================
-   SCANNER UI
-   Browser loads this via GET
+   SCAN ENDPOINT — GOOGLE IS SOURCE OF TRUTH
 ========================================================= */
-app.get('/scan', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'scan.html'));
-});
-
-/* =========================================================
-   QR SCAN ENDPOINT
-   Scanner JS POSTs here
-========================================================= */
-app.post('/scan', async (req, res) => {
+app.post("/api/scan", async (req, res) => {
   try {
-    // ---------------------------------------------
-    // 1. Capture RAW scanned value (defensive)
-    // ---------------------------------------------
-    const rawScan =
-      req.body?.value ||
-      req.body?.scan ||
-      req.body?.data ||
-      req.body?.qr ||
-      '';
-
-    // ---------------------------------------------
-    // 2. Normalize / extract token
-    // ---------------------------------------------
-    const token = extractToken(rawScan);
-
-    // Optional but VERY useful onsite
-    logNormalization(rawScan, token);
+    const { token, scanType } = req.body;
 
     if (!token) {
-      return res.json({
-        status: 'DENIED',
-        message: 'INVALID QR FORMAT'
-      });
+      log("—", scanType, "FAIL", "NO TOKEN");
+      return res.json({ ok: false, message: "NO TOKEN" });
     }
 
-    // ---------------------------------------------
-    // 3. Validate token against RideLedger
-    // ---------------------------------------------
-    const result = await validateQRToken(token);
+    // Call Google Apps Script validator
+    const response = await fetch(
+      GOOGLE_VALIDATE_URL + "?token=" + encodeURIComponent(token)
+    );
+
+    const result = await response.json();
 
     /*
-      Expected result shape:
+      Expected Google response:
       {
-        allowed: true | false,
-        message: 'VALID PASS' | 'ALREADY USED' | 'INVALID PASS'
+        status: "ALLOWED" | "DENIED" | "ERROR",
+        message: "...",
+        timestamp: "..."
       }
     */
 
-    if (!result || result.allowed !== true) {
+    if (result.status !== "ALLOWED") {
+      log(token, scanType, "FAIL", result.message);
       return res.json({
-        status: 'DENIED',
-        message: result?.message || 'INVALID PASS'
+        ok: false,
+        message: result.message || "INVALID QR"
       });
     }
 
-    // ---------------------------------------------
-    // 4. Success
-    // ---------------------------------------------
+    // ✅ Valid scan
+    log(token, scanType, "OK", "VALID PASS");
     return res.json({
-      status: 'ALLOWED',
-      message: result.message || 'VALID PASS'
+      ok: true,
+      message: "VALID PASS"
     });
 
   } catch (err) {
-    console.error('❌ SCAN ERROR:', err);
-
+    console.error("Scan error:", err);
+    log("—", "SYSTEM", "ERROR", err.message);
     return res.json({
-      status: 'DENIED',
-      message: 'SCAN ERROR'
+      ok: false,
+      message: "SCAN ERROR"
     });
   }
 });
 
 /* =========================================================
-   SERVER START
+   LOGGING (LOCAL AUDIT TRAIL)
 ========================================================= */
+function log(token, type, result, message) {
+  try {
+    db.prepare(`
+      INSERT INTO scans (token, scan_type, result, message, scanned_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(token, type, result, message, now());
+  } catch (e) {
+    console.error("Logging error:", e);
+  }
+}
+
 app.listen(PORT, () => {
-  console.log(`🚐 EDC Shuttle QR Scanner running on port ${PORT}`);
-  console.log(`📷 Scanner UI: http://localhost:${PORT}/scan`);
+  console.log("🚍 EDC Shuttle QR backend running on port", PORT);
 });
