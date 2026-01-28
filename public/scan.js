@@ -1,6 +1,6 @@
 /* =========================================================
    EDC SHUTTLE – STAFF QR SCANNER
-   VERSION: ULTIMATE ROBUST EXTRACTION + VISUAL FLASH
+   VERSION: PRODUCTION FIXED - HANDLES EMAILED TOKENS
 ========================================================= */
 
 let scanType = "DEPART";
@@ -8,7 +8,6 @@ let lastScannedToken = null;
 
 const video = document.getElementById("video");
 const statusEl = document.getElementById("status");
-
 const departBtn = document.getElementById("depart");
 const returnBtn = document.getElementById("return");
 
@@ -17,14 +16,12 @@ const returnBtn = document.getElementById("return");
 ========================= */
 function triggerFlash(type) {
   document.body.classList.remove("flash-ok", "flash-fail");
-  void document.body.offsetWidth; // Force reflow
-
+  void document.body.offsetWidth; 
   if (type === "ok") {
     document.body.classList.add("flash-ok");
   } else {
     document.body.classList.add("flash-fail");
   }
-
   setTimeout(() => {
     document.body.classList.remove("flash-ok", "flash-fail");
   }, 500);
@@ -36,23 +33,20 @@ function triggerFlash(type) {
 function setMode(mode) {
   scanType = mode;
   lastScannedToken = null; 
-
   if (mode === "DEPART") {
     departBtn.classList.add("active");
     returnBtn.classList.remove("active");
-    statusEl.textContent = "MODE: DEPARTURE (Scanning 'TO' or 'ROUND')";
+    statusEl.textContent = "MODE: DEPARTURE";
   } else {
     returnBtn.classList.add("active");
     departBtn.classList.remove("active");
-    statusEl.textContent = "MODE: RETURN (Scanning 'FROM' or 'ROUND')";
+    statusEl.textContent = "MODE: RETURN";
   }
-
   statusEl.className = "muted";
   if (navigator.vibrate) navigator.vibrate(30);
 }
 
 setMode("DEPART");
-
 departBtn.addEventListener("click", () => setMode("DEPART"));
 returnBtn.addEventListener("click", () => setMode("RETURN"));
 
@@ -70,7 +64,6 @@ navigator.mediaDevices.getUserMedia({
 .catch(err => {
   statusEl.textContent = "CAMERA ERROR";
   statusEl.className = "fail";
-  console.error("Camera error:", err);
 });
 
 if (!("BarcodeDetector" in window)) {
@@ -78,7 +71,6 @@ if (!("BarcodeDetector" in window)) {
   statusEl.className = "fail";
   throw new Error("BarcodeDetector not supported");
 }
-
 const detector = new BarcodeDetector({ formats: ["qr_code"] });
 
 /* =========================================================
@@ -92,68 +84,24 @@ setInterval(async () => {
     let rawValue = String(barcodes[0].rawValue || "").trim();
     if (!rawValue) return;
 
+    // --- 1. ROBUST TOKEN EXTRACTION ---
+    // This looks for the EDC pattern even if it's inside an email link
     let token = null;
-
-    // --- 1. ROBUST EXTRACTION LOGIC ---
-    // Pattern: EDC + 6 digits + Day + numbers + 8 char hex/id
     const tokenRegex = /EDC-[0-9]{6}-[A-Z]{3}-[0-9]+-[A-Z0-9]{8}/i;
 
-    // A. Check if the raw value IS the token
-    if (tokenRegex.test(rawValue)) {
-      const match = rawValue.match(tokenRegex);
-      token = match[0].toUpperCase();
-    } 
-    // B. Check if it's a URL (Full or Partial)
-    else if (rawValue.includes("token=")) {
-      try {
-        const url = new URL(rawValue.startsWith('http') ? rawValue : 'https://dummy.com' + rawValue);
-        token = url.searchParams.get("token");
-      } catch (e) {
-        const decoded = decodeURIComponent(rawValue);
-        const match = decoded.match(tokenRegex);
-        if (match) token = match[0].toUpperCase();
-      }
-    }
-    // C. Final Catch-All: Just look for the pattern anywhere in the string
-    if (!token) {
-      const match = rawValue.match(tokenRegex);
-      if (match) token = match[0].toUpperCase();
+    const match = rawValue.match(tokenRegex);
+    if (match) {
+        token = match[0].toUpperCase();
     }
 
     if (!token) return;
 
-    // --- 2. GATEKEEPER (Direction & Repeat Check) ---
+    // --- 2. GATEKEEPER (Repeat Preventer) ---
     if (token === lastScannedToken) return;
 
-    // DEPART Mode Direction Check
-    if (scanType === "DEPART") {
-      if (!token.includes("-TO-") && !token.includes("-ROUND-")) {
-        statusEl.textContent = "WRONG DIRECTION! (Ticket is RETURN Only)";
-        statusEl.className = "fail";
-        triggerFlash("fail");
-        if (navigator.vibrate) navigator.vibrate([50, 50, 50, 50]);
-        
-        lastScannedToken = token;
-        setTimeout(() => { lastScannedToken = null; statusEl.textContent = "READY"; }, 2000);
-        return; 
-      }
-    }
-
-    // RETURN Mode Direction Check
-    if (scanType === "RETURN") {
-      if (!token.includes("-FROM-") && !token.includes("-ROUND-")) {
-        statusEl.textContent = "WRONG DIRECTION! (Ticket is DEPART Only)";
-        statusEl.className = "fail";
-        triggerFlash("fail");
-        if (navigator.vibrate) navigator.vibrate([50, 50, 50, 50]);
-        
-        lastScannedToken = token;
-        setTimeout(() => { lastScannedToken = null; statusEl.textContent = "READY"; }, 2000);
-        return;
-      }
-    }
-    
     // --- 3. SERVER VALIDATION ---
+    // We NO LONGER check for "-TO-" or "-FROM-" here. 
+    // The Google Script (doGet) checks the Direction column in your sheet for us.
     lastScannedToken = token;
     statusEl.textContent = "CHECKING…";
     statusEl.className = "muted";
@@ -171,20 +119,18 @@ setInterval(async () => {
         triggerFlash("ok");
         if (navigator.vibrate) navigator.vibrate(50);
       } else {
+        // If it's the wrong direction, the server will now tell the phone
         statusEl.textContent = data.message;
         statusEl.className = "fail";
         triggerFlash("fail");
         if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
       }
-
     } catch (networkErr) {
-      console.error(networkErr);
       statusEl.textContent = "NETWORK ERROR";
       statusEl.className = "fail";
       triggerFlash("fail");
     }
 
-    // Allow re-scanning after 3 seconds
     setTimeout(() => {
       lastScannedToken = null;
     }, 3000);
